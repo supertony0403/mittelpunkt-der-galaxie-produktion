@@ -1,0 +1,15 @@
+# unreleased music: never publish audio, stems, lyrics or artwork
+src/
+stems/
+renders/
+*.wav
+*.mp3
+*.flac
+*.npy
+*.jpg
+*.png
+analyse/*.log
+analyse/*.json
+analyse/*.txt
+analyse/*.err
+__pycache__/
