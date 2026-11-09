@@ -13,3 +13,6 @@ analyse/*.json
 analyse/*.txt
 analyse/*.err
 __pycache__/
+release/*.wav
+release/*.jpg
+release/Songtext.txt
