@@ -79,6 +79,9 @@ def shift(x, sec, sr=SR):
     return out
 
 
+CORRECTION = True   # --tune none switches pitch correction off everywhere (shifts stay)
+
+
 def graillon(x, sr=SR, **kw):
     p = pb.load_plugin(GRAILLON)
     for note, ok in SCALE.items():
@@ -89,6 +92,8 @@ def graillon(x, sr=SR, **kw):
     p.wet_mix_db = 0.0
     for k, v in kw.items():
         setattr(p, k, v)
+    if not CORRECTION:
+        p.correction = False
     return p(x.astype(np.float32), sr)
 
 
@@ -204,6 +209,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("proj")
     ap.add_argument("--lufs", type=float, default=-10.0)
+    ap.add_argument("--tune", choices=["light", "none"], default="light")
+    ap.add_argument("--name", default="Mittelpunkt der Galaxie - Master 24bit.wav")
     args = ap.parse_args()
     P = args.proj
     S = P + "/stems/htdemucs_ft"
@@ -221,7 +228,10 @@ def main():
 
     # ---------- LEAD VOCAL ----------
     lead_in = board(voc, pb.HighpassFilter(95), pb.NoiseGate(threshold_db=-52, ratio=3, release_ms=120))
-    lead_t = graillon(lead_in, smooth=3.0, inertia=5.0, snap_max_st=8.0)          # audible modern tune
+    global CORRECTION
+    TUNE = args.tune != "none"
+    CORRECTION = TUNE
+    lead_t = lead_in if not TUNE else graillon(lead_in, smooth=18.0, inertia=30.0, corr_amount=55.0, snap_max_st=1.5)   # natural: gentle pull, no robot
     lead = board(lead_t,
                  pb.PeakFilter(280, -2.5, 1.0),
                  pb.PeakFilter(3400, 1.5, 0.8),
@@ -235,10 +245,10 @@ def main():
     n = N
     hook_env = region_env(n, HOOKS)
     hook_src = lead_in * hook_env
-    dblL = graillon(hook_src, smooth=1.0, inertia=0.0, pitch_shift_st=0.10)      # hard tuned, +10 ct
-    dblR = graillon(hook_src, smooth=1.0, inertia=0.0, pitch_shift_st=-0.09)
-    octd = graillon(hook_src, smooth=2.0, pitch_shift_st=-12.0, formant=True, formant_amount=100.0)
-    octu = graillon(hook_src, smooth=2.0, pitch_shift_st=12.0, formant=True, formant_amount=100.0)
+    dblL = graillon(hook_src, smooth=12.0, inertia=20.0, corr_amount=65.0, pitch_shift_st=0.10)   # soft tuned, +10 ct
+    dblR = graillon(hook_src, smooth=12.0, inertia=20.0, corr_amount=65.0, pitch_shift_st=-0.09)
+    octd = graillon(hook_src, smooth=12.0, corr_amount=60.0, pitch_shift_st=-12.0, formant=True, formant_amount=100.0)
+    octu = graillon(hook_src, smooth=12.0, corr_amount=60.0, pitch_shift_st=12.0, formant=True, formant_amount=100.0)
     dbl_chain = (pb.HighpassFilter(160), pb.PeakFilter(300, -3, 1.0), pb.HighShelfFilter(9000, 2),
                  pb.Compressor(threshold_db=-24, ratio=6, attack_ms=2, release_ms=60))
     dblL = board(shift(dblL, 0.017), *dbl_chain)
@@ -250,7 +260,7 @@ def main():
     # pre-chorus: rising pitched backing (octave up, filtered)
     pre_env = region_env(n, PRE)
     pre_src = lead_in * pre_env
-    pre_up = graillon(pre_src, smooth=2.0, pitch_shift_st=12.0, formant=True)
+    pre_up = graillon(pre_src, smooth=12.0, corr_amount=60.0, pitch_shift_st=12.0, formant=True)
     pre_up = board(pre_up, pb.HighpassFilter(700), pb.Compressor(threshold_db=-24, ratio=5))
     ramp = np.zeros(n, np.float32)
     for a, b in PRE:
@@ -292,15 +302,15 @@ def main():
             src = (src * w).astype(np.float32)
             src = np.pad(src, ((0, 0), (0, int(1.2 * SR))))
             if st == "up":
-                x = graillon(src, smooth=1.0, pitch_shift_st=12.0, formant=True)
+                x = graillon(src, smooth=8.0, corr_amount=60.0, pitch_shift_st=12.0, formant=True)
                 x = board(x, pb.HighpassFilter(400), pb.Delay(delay_seconds=bar / 8 * 3 / 2, feedback=0.35, mix=0.45))
                 x = pan(x, -0.75 if k % 2 else 0.75) * db(-9)
             elif st == "down":
-                x = graillon(src, smooth=1.0, pitch_shift_st=-12.0)
+                x = graillon(src, smooth=8.0, corr_amount=60.0, pitch_shift_st=-12.0)
                 x = board(x, pb.Distortion(drive_db=8), pb.LowpassFilter(4000), pb.Delay(delay_seconds=bar / 4, feedback=0.25, mix=0.35))
                 x = pan(x, 0.0) * db(-10)
             else:
-                x = radio(graillon(src, smooth=1.0))
+                x = radio(graillon(src, smooth=8.0, corr_amount=60.0))
                 x = board(x, pb.Delay(delay_seconds=bar / 8, feedback=0.45, mix=0.5))
                 x = pan(x, 0.6 if k % 2 else -0.6) * db(-8)
             pos = int((t_end + 0.06) * SR)
@@ -461,7 +471,7 @@ def main():
                      "limiter_gr_db_median/p99": [round(float(np.median(lim_gr)), 2), round(float(np.percentile(lim_gr, 99)), 2)]}
 
     R = P + "/renders"
-    sf.write(R + "/Mittelpunkt der Galaxie - Master 24bit.wav", out.T, SR, subtype="PCM_24")
+    sf.write(R + "/" + args.name, out.T, SR, subtype="PCM_24")
     stems = {"lead_vocal": lead, "hook_stack": hook, "adlibs": ad, "vocal_chops": chops,
              "vocal_fx": plate * db(-16) + dly * db(-20),
              "drums": drums, "bass": bass_out, "music": oth_w, "fx": sfx + tag_full}   # pre bus-gain / master
